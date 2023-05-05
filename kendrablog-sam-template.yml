@@ -1,0 +1,657 @@
+# Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: MIT-0
+# Permission is hereby granted, free of charge, to any person obtaining a copy of this
+# software and associated documentation files (the "Software"), to deal in the Software
+# without restriction, including without limitation the rights to use, copy, modify,
+# merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+# permit persons to whom the Software is furnished to do so.
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+# PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+# HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+# OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+# SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+#
+
+
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: 'This template will provision necessary infrastructure resource for the Amazon Kendra Search Analytics dashboard.'
+Parameters:
+  KendraIndex:
+    Type: String
+    Description: Provide the Index Id of your Amazon Kendra Index.
+  LambdaECRRepository:
+    Type: String
+    Description: Provide the Name of the ECR repository that stores the container image for the AWS Lambda fucntion that invokes Amazon SageMaker Endpoint.
+  QSIdentityRegion:
+    Type: String
+    Description: Provide the Identity Region of your Amazon QuickSight. Amazon QuickSight manages users and groups in special regions designated as Identity regions, which aligned with your region selection when you signed up your Amazon QuickSight subscription. (e.g. us-east-1)
+  QSUserEmail:
+    Type: String
+    Description: Provide the Email address you would like to use for the Amazon QuickSight user in this solution. (e.g. sample@company.com)
+  QSUserDefaultPassward:
+    Type: String
+    Description: Provide the Default Passward string you would like to use for the Amazomn QuickSight user. The Password should have at least one uppercase letter, one lowercase letter, one number, and one special character (@#$%^&+=). The passwaed must be at least 8 digits and a maximum of 64 digits (e.g Kendra1234@) You will be aksed to change this default passward when you log in to the Console first.
+    NoEcho: true
+    MinLength: 8
+    MaxLength: 64
+    AllowedPattern: '[A-Za-z0-9@#$%^&+=]+'
+
+Resources:
+# IAM Roles and policy
+  SageMakerIAMRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName: "AmazonSageMaker-ExecutionRole-hfmodel-kendrablog"
+      Path: "/service-role/"
+      Description: "IAM role for SageMaker HuggingFace model"
+      AssumeRolePolicyDocument: "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"sagemaker.amazonaws.com\"},\"Action\":\"sts:AssumeRole\"}]}"
+      ManagedPolicyArns: 
+        - "arn:aws:iam::aws:policy/AmazonSageMakerFullAccess"
+      Policies:
+      - PolicyName: "AmazonSageMaker-ExecutionRole-hfmodel-kendrablog-policy"
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+              - s3:DeleteObject
+              - s3:ListBucket
+            Resource: "arn:aws:s3:::*" 
+  LambdaKendraIAMRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName: "LambdaKendraRole-kendrablog"
+      Path: "/service-role/"
+      AssumeRolePolicyDocument: "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"lambda.amazonaws.com\"},\"Action\":\"sts:AssumeRole\"}]}"
+      ManagedPolicyArns: 
+        - "arn:aws:iam::aws:policy/AmazonKendraFullAccess"
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaRole"
+      Policies:
+      - PolicyName: "LambdaKendraIAMRole-kendrablog-policy"
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+            Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*" 
+          - Effect: Allow
+            Action:
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource:
+              - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/GetKendraSnapshotMetricsFunction:*"   
+              - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/GetKendraTrendMetricsFunction:*"
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+              - s3:ListBucket
+            Resource: !Sub "arn:aws:s3:::*"
+  LambdaSMIAMRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName: "LambdaSMRole-kendrablog"
+      Path: "/service-role/"
+      AssumeRolePolicyDocument: "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"lambda.amazonaws.com\"},\"Action\":\"sts:AssumeRole\"}]}"
+      ManagedPolicyArns: 
+        - "arn:aws:iam::aws:policy/AmazonSageMakerFullAccess"
+      Policies:
+      - PolicyName: "LambdaKendraIAMRole-kendrablog-policy"
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+            Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*" 
+          - Effect: Allow
+            Action:
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/HFProcessingFunction:*"         
+          - Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+              - s3:ListBucket
+            Resource: !Sub "arn:aws:s3:::*"
+  GlueCrawlerIAMRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName: "GlueCrawlerRole-kendrablog"
+      Path: "/service-role/"
+      AssumeRolePolicyDocument: "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"glue.amazonaws.com\"},\"Action\":\"sts:AssumeRole\"}]}"
+      ManagedPolicyArns: 
+        - "arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole"
+      Policies:
+      - PolicyName: "GlueCrawlerRole-kendrablog-policy"
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+              - s3:PutObject
+              - s3:GetObject
+            Resource: !Sub "arn:aws:s3:::${ArtifactsS3Bucket}/metrics/*" 
+  QSIAMUser:
+    Type: "AWS::IAM::User"
+    Properties:
+      UserName: "qsuser-kendrablog"
+      Path: "/"
+      LoginProfile:
+        Password: !Ref QSUserDefaultPassward
+        PasswordResetRequired: true
+      ManagedPolicyArns: 
+        - "arn:aws:iam::aws:policy/service-role/AWSQuickSightListIAM"
+        - "arn:aws:iam::aws:policy/service-role/AWSQuicksightAthenaAccess"
+      Policies:
+      - PolicyName: "CustomLambdaRole-kendrablog-policy"
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+              - s3:ListAllMyBuckets
+            Resource: "arn:aws:s3:::*"
+          - Effect: Allow
+            Action:
+              -  iam:ChangePassword
+            Resource: "arn:aws:iam::125801171606:user/qsuser-kendrablog"
+          - Effect: Allow
+            Action:
+              - s3:ListBucket
+              - s3:GetObject
+              - s3:GetObjectVersion
+              - s3:ListBucketMultipartUploads
+              - s3:GetBucketLocation
+              - s3:PutObject
+              - s3:AbortMultipartUpload
+              - s3:ListMultipartUploadParts
+            Resource: !Sub "arn:aws:s3:::${ArtifactsS3Bucket}"
+
+# S3 Bucket
+  ArtifactsS3Bucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Sub "${AWS::AccountId}-${AWS::Region}-artifactsbucket-kendrablog"
+
+# SageMaker Model & Inference endpoint
+  SageMakerHFModel:
+    Type: "AWS::SageMaker::Model"
+    Properties:
+      ModelName: "huggingface-pytorch-inference-kendrablog"
+      PrimaryContainer: 
+        Environment: 
+            HF_MODEL_ID: "sentence-transformers/all-MiniLM-L12-v1"
+            HF_TASK: "feature-extraction"
+        Image: !Sub "763104351884.dkr.ecr.${AWS::Region}.amazonaws.com/huggingface-pytorch-inference:1.10.2-transformers4.17.0-cpu-py38-ubuntu20.04"
+      ExecutionRoleArn: !GetAtt SageMakerIAMRole.Arn
+  SageMakerEndpointConfig:
+    Type: "AWS::SageMaker::EndpointConfig"
+    Properties:
+        EndpointConfigName: "hf-serverless-epc-kendrablog"
+        ProductionVariants: 
+          - 
+            VariantName: "HFVariant"
+            ModelName: !GetAtt SageMakerHFModel.ModelName
+            InitialVariantWeight: 1
+            ServerlessConfig:
+              MaxConcurrency: 1
+              MemorySizeInMB: 4096
+  SageMakerEndpoint:
+      Type: "AWS::SageMaker::Endpoint"
+      Properties:
+          EndpointName: "hf-serverless-ep-kendrablog"
+          EndpointConfigName: !GetAtt SageMakerEndpointConfig.EndpointConfigName
+
+
+# Lambda Functions
+  GetSnapshotMetricsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: "GetKendraSnapshotMetricsFunction"
+      Runtime: python3.9
+      Architectures:
+        - "arm64"
+      Handler: 'index.lambda_handler'
+      InlineCode: |
+        import json
+        import boto3
+        import csv
+        import os
+
+        kendra = boto3.client('kendra')
+        s3 = boto3.client('s3')    
+        lambda_func = boto3.client('lambda')
+
+        def lambda_handler(event, context):
+          aggregate_metrics = ['QUERIES_BY_COUNT', 'QUERIES_BY_ZERO_CLICK_RATE',
+          'QUERIES_BY_ZERO_RESULT_RATE', 'DOCS_BY_CLICK_COUNT', 'AGG_QUERY_DOC_METRICS']
+          for metric in aggregate_metrics:
+              snapshot = get_kendra_analytics_snapshot(metric)
+              file = write_to_csv(snapshot)
+              upload_to_s3(file, metric)
+          invoke_hffunction(event)
+
+        def get_kendra_analytics_snapshot(metricType):
+          index_id = os.environ['INDEX_ID']
+          interval = 'ONE_MONTH_AGO'
+
+          snapshot = kendra.get_snapshots(
+              IndexId= index_id,
+              Interval= interval,
+              MetricType= metricType
+              )
+          
+          header = snapshot['SnapshotsDataHeader']
+          data = snapshot['SnapshotsData']
+          data.insert(0, header)
+          return data
+
+        def write_to_csv(data):
+          tmp_file = '/tmp/snapshot.csv'
+          with open(tmp_file, 'w', newline='') as csvfile:
+              writer = csv.writer(csvfile)
+              writer.writerows(data)
+          return tmp_file
+          
+        def upload_to_s3(local_file, metric_name):
+          bucket = os.environ['S3_BUCKET']
+          object_name = 'metrics/{}/{}.csv'.format(metric_name, metric_name)
+          s3.upload_file(local_file, bucket, object_name)
+
+        def invoke_hffunction(event):
+          lambda_func.invoke(
+            FunctionName= os.environ['LAMBDA_FUNCTION'],
+            InvocationType='Event',
+            Payload=json.dumps(event),
+            LogType='Tail'
+          )
+      Environment:
+        Variables:
+          INDEX_ID: !Ref KendraIndex
+          S3_BUCKET: !Ref ArtifactsS3Bucket
+          LAMBDA_FUNCTION: !Ref HFProcessingFunction
+      Role: !GetAtt LambdaKendraIAMRole.Arn
+      MemorySize: 128
+      EphemeralStorage: 
+        Size: 512
+      Timeout: 30
+      Events:
+        ScheduleEvent:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: "rate(30 days)"
+            State: ENABLED
+
+  GetTrendtMetricsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: "GetKendraTrendMetricsFunction"
+      Runtime: python3.9
+      Layers:
+        - !Sub "arn:aws:lambda:${AWS::Region}:336392948345:layer:AWSSDKPandas-Python39:1"
+      Handler: 'index.lambda_handler'
+      InlineCode: |
+        import boto3
+        import pandas as pd
+        import json
+        import ast
+        import csv
+        import os
+
+        kendra = boto3.client('kendra')
+        s3 = boto3.client('s3')
+
+        def lambda_handler(event, context):
+            metric_type = "TREND_QUERY_DOC_METRICS"
+            snapshot = get_kendra_analytics_snapshot(metric_type)
+            upload_to_s3(snapshot, metric_type)
+
+        def get_kendra_analytics_snapshot(metricType):
+            index_id = os.environ['INDEX_ID']
+            interval = "ONE_MONTH_AGO"
+            response = kendra.get_snapshots(
+                IndexId= index_id,
+                Interval= interval,
+                MetricType= metricType
+                )
+
+            metrics_data=pd.read_json(json.dumps(response['SnapshotsData']))
+            metrics_data.columns=['Date', 'Data']
+            metrics_data['Data'] = metrics_data['Data'].apply(ast.literal_eval)
+            metrics = metrics_data.explode('Data').reset_index(drop=True)
+            metrics = metrics.join(pd.DataFrame(metrics.pop('Data').tolist())).groupby('Date').sum()
+            metrics = metrics.transpose()
+            
+            tmp_file = '/tmp/snapshot.csv'
+            metrics.to_csv(tmp_file, index=True)
+            return tmp_file
+
+        def upload_to_s3(local_file, metric_name):
+            bucket = os.environ['S3_BUCKET']
+            object_name = 'metrics/{}/{}.csv'.format(metric_name, metric_name)
+            s3.upload_file(local_file, bucket, object_name)
+      Environment: 
+        Variables: 
+          INDEX_ID: !Ref KendraIndex
+          S3_BUCKET: !Ref ArtifactsS3Bucket
+      Role: !GetAtt LambdaKendraIAMRole.Arn
+      MemorySize: 128
+      EphemeralStorage: 
+        Size: 512
+      Timeout: 30
+      Events:
+        ScheduleEvent:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: "rate(30 days)"
+            State: ENABLED
+
+  HFProcessingFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: "HFProcessingFunction"
+      Architectures: 
+        - "arm64"
+      PackageType: "Image"
+      ImageUri: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${LambdaECRRepository}:latest"
+      Environment:
+        Variables:
+          S3_BUCKET: !Ref ArtifactsS3Bucket
+          SM_ENDPOINT: !GetAtt SageMakerEndpoint.EndpointName
+      Role: !GetAtt LambdaSMIAMRole.Arn
+      MemorySize: 128
+      EphemeralStorage: 
+        Size: 512
+      Timeout: 180
+
+# Lambda backed Custom Resource for QS user creation
+  CustomQSLambdaIAMRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName: "CustomQSLambdaRole-kendrablog"
+      Path: "/service-role/"
+      AssumeRolePolicyDocument: "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"lambda.amazonaws.com\"},\"Action\":\"sts:AssumeRole\"}]}"  
+      Policies:
+      - PolicyName: "CustomLambdaRole-kendrablog-policy"
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+            Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*" 
+          - Effect: Allow
+            Action:
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/CreateQSUserFunction:*"         
+          - Effect: Allow
+            Action:
+              - quicksight:RegisterUser
+              - quicksight:DeleteUser
+            Resource: "*"
+  
+  CreateQSUser:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: "CreateQSUserFunction"
+      Runtime: python3.9
+      Handler: 'index.lambda_handler'
+      Role: !GetAtt CustomQSLambdaIAMRole.Arn
+      InlineCode: | 
+        import json
+        import boto3
+        import os
+        import cfnresponse
+
+        qs = boto3.client("quicksight")
+        account_id = os.environ['AWS_ID']
+        iam = os.environ['IAM_USER']
+
+        def lambda_handler(event, context):
+            try:
+              if event['RequestType'] == 'Create':
+                response = create_qsuser()
+              if event['RequestType'] == 'Delete':
+                response = delete_qsuser()
+              if event['RequestType'] == 'Update':
+                delete_qsuser()
+                response = create_qsuser()
+              cfnresponse.send(event, context, cfnresponse.SUCCESS, response)
+            except Exception as e:
+              cfnresponse.send(event, context, cfnresponse.FAILED, {})
+
+        def create_qsuser():
+            response = qs.register_user(
+                IdentityType='IAM',
+                Email=os.environ['EMAIL'],
+                UserRole='ADMIN',
+                IamArn="arn:aws:iam::" + account_id + ":user/" + iam,
+                AwsAccountId=account_id,
+                Namespace='default'
+            )
+            
+        def delete_qsuser():
+            response = qs.delete_user(
+                UserName=iam,
+                AwsAccountId=account_id,
+                Namespace='default'
+                )
+      Environment:
+        Variables: 
+          AWS_ID: !Ref AWS::AccountId
+          EMAIL: !Ref QSUserEmail
+          IAM_USER: !Ref QSIAMUser
+
+  CustomResourceCreateQSUser:
+    Type: Custom::CreateQSUser
+    Properties:
+      ServiceToken: !GetAtt CreateQSUser.Arn
+
+# Lambda backed Custom Resource for starting Glue Crawler
+  CustomGlueLambdaIAMRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      RoleName: "CustomGlueLambdaRole-kendrablog"
+      Path: "/service-role/"
+      AssumeRolePolicyDocument: "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":{\"Service\":\"lambda.amazonaws.com\"},\"Action\":\"sts:AssumeRole\"}]}"  
+      ManagedPolicyArns:
+      - "arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole" 
+      - "arn:aws:iam::aws:policy/service-role/AWSLambdaRole"
+      Policies:
+      - PolicyName: "CustomGlueLambdaRole-kendrablog-policy"
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+            Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*" 
+          - Effect: Allow
+            Action:
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/StartGlueCrawlerFunction:*"         
+  StartCrawler:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: "StartGlueCrawlerFunction"
+      Runtime: python3.9
+      Handler: 'index.lambda_handler'
+      Role: !GetAtt CustomGlueLambdaIAMRole.Arn
+      InlineCode: | 
+        import json
+        import boto3
+        import os
+        import cfnresponse
+        import time
+
+        glue = boto3.client("glue")
+        lambda_func = boto3.client("lambda")
+
+        snap_func = os.environ['SNAP_FUNC']
+        trend_func = os.environ['TREND_FUNC']
+
+        def lambda_handler(event, context):
+            try:
+              if event['RequestType'] == 'Create':
+                lambda_snapshot = invoke_lambda(snap_func, event)
+                lambda_trend = invoke_lambda(trend_func, event)
+                response = start_crawler()
+              if event['RequestType'] == 'Delete':
+                None
+              if event['RequestType'] == 'Update':
+                lambda_snapshot = invoke_lambda(snap_func, event)
+                print(lambda_snapshot)
+                lambda_trend = invoke_lambda(trend_func, event)
+                print(lambda_trend)
+                time.sleep(10)
+                response = start_crawler()
+                print(response)
+              cfnresponse.send(event, context, cfnresponse.SUCCESS, response)
+            except Exception as e:
+              print(e)
+              cfnresponse.send(event, context, cfnresponse.FAILED, {})
+
+        def invoke_lambda(func, event):
+            response = lambda_func.invoke(
+                FunctionName=func,
+                Payload=json.dumps(event),
+                LogType='Tail'
+            )
+            return response
+
+        def start_crawler():
+            crawler_name = os.environ['CRAWLER']
+            response = glue.start_crawler(
+                Name=crawler_name
+                )
+            return response
+      Environment:
+        Variables:
+          SNAP_FUNC: !Ref GetSnapshotMetricsFunction
+          TREND_FUNC: !Ref GetTrendtMetricsFunction
+          CRAWLER: !Ref GlueCrawler
+      Timeout: 300
+  CustomResourceStartCrawler:
+    Type: Custom::StartCrawler
+    Properties:
+      ServiceToken: !GetAtt StartCrawler.Arn
+
+# Glue Crawler and the LF permission
+  GlueDatabase:
+    Type: "AWS::Glue::Database"
+    Properties:
+      CatalogId: !Ref "AWS::AccountId"
+      DatabaseInput: 
+        Name: "kendra-search-analyics-database"
+        Description: "Glue database for Amazon kendra analytics dashboard"
+        LocationUri: !Sub "s3://${ArtifactsS3Bucket}/metrics"
+  GlueCrawler:
+    Type: "AWS::Glue::Crawler"
+    Properties:
+      Name: "kendra-search-analyics-gluecrawler"
+      Role: !GetAtt GlueCrawlerIAMRole.Arn
+      DatabaseName: !Ref GlueDatabase
+      Targets: 
+          S3Targets: 
+            - 
+              Path: !Sub "s3://${ArtifactsS3Bucket}/metrics"
+      SchemaChangePolicy: 
+          UpdateBehavior: "UPDATE_IN_DATABASE"
+          DeleteBehavior: "DEPRECATE_IN_DATABASE"
+  GlueLFPermission:
+    Type: AWS::LakeFormation::PrincipalPermissions
+    Properties: 
+      Catalog: !Ref AWS::AccountId
+      Permissions: 
+        - ALL
+      PermissionsWithGrantOption:
+        - ALL
+      Principal: 
+        DataLakePrincipalIdentifier: !GetAtt GlueCrawlerIAMRole.Arn
+      Resource:
+        Database: 
+          CatalogId: !Ref AWS::AccountId
+          Name: !Ref GlueDatabase
+  QSAthenaTableLFPermission:
+    Type: AWS::LakeFormation::PrincipalPermissions
+    DependsOn: CustomResourceStartCrawler
+    Properties: 
+      Catalog: !Ref AWS::AccountId
+      Permissions: 
+        - SELECT
+        - "INSERT"
+        - "DELETE" 
+        - "ALTER"
+        - "DESCRIBE"
+      PermissionsWithGrantOption:
+        - SELECT
+        - "INSERT"
+        - "DELETE" 
+        - "ALTER"
+        - "DESCRIBE"
+      Principal: 
+        DataLakePrincipalIdentifier: !Sub "arn:aws:quicksight:${QSIdentityRegion}:${AWS::AccountId}:user/default/${QSIAMUser}"
+      Resource:
+        Table:
+          CatalogId: !Ref AWS::AccountId
+          DatabaseName: !Ref GlueDatabase
+          TableWildcard: {}
+    
+# Athena Workgroup
+  AthenaWorkGroup:
+    Type: "AWS::Athena::WorkGroup"
+    Properties:
+      Name: "kendrablog"
+      Description: Athena WorkGroup for kendra blog sample stack
+      State: "ENABLED"
+      WorkGroupConfiguration: 
+        EnforceWorkGroupConfiguration: false
+        PublishCloudWatchMetricsEnabled: true
+        ResultConfiguration: 
+          OutputLocation: !Sub "s3://${ArtifactsS3Bucket}/athena_query_result/"
+
+# Generated resource information
+Outputs:
+  S3Bucket:
+    Value: !GetAtt ArtifactsS3Bucket.Arn
+    Description: ARN of the Amazon S3 bucket to store kendra search metrics.
+  LambdaFunction1:
+    Value: !GetAtt GetSnapshotMetricsFunction.Arn
+    Description: ARN of the Lambda function that gets Amazon Kendra snapshot metrics.
+  LambdaFunction2:
+    Value: !GetAtt GetTrendtMetricsFunction.Arn
+    Description: ARN of the Lambda function that gets Amazon Kendra trend metrics.
+  LambdaFunction3:
+    Value: !GetAtt HFProcessingFunction.Arn
+    Description: ARN of the Lambda function that gets inference result from SageMaker Endpoint.
+  SageMakerModel:
+    Value: !Ref SageMakerHFModel
+    Description: ARN of the SageMaker HuggingFace model for semantic similarity.
+  SageMakerEndpointConfig:
+    Value: !Ref SageMakerEndpointConfig
+    Description: ARN of the SageMaker Endpoint Configuration for the HuggingFace model.
+  SageMakerEndpoint:
+    Value: !Ref SageMakerEndpoint
+    Description: ARN of the SageMaker Serverless Endpoint for the HuggingFace model.
+  GlueDatabase:
+    Value: !Ref GlueDatabase
+    Description: The name of Glue Database for Amazon Kendra search metrics.
+  GlueCrawler:
+    Value: !Ref GlueCrawler
+    Description: The name of Glue Crawler that crawls S3 bucket for Amazon Kendra Index.
+  AthenaWorkgroup:
+    Value: !Ref AthenaWorkGroup
+    Description: The name of the Amazon Athena Workgroup for QuickSight dataset.
+  QSIAMUser:
+    Value: !GetAtt QSIAMUser.Arn
+    Description: The IAM user ARN that the QuickSight User assumes.
+    
