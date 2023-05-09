@@ -32,11 +32,11 @@ Parameters:
     Description: Provide the Email address you would like to use for the Amazon QuickSight user in this solution. (e.g. sample@company.com)
   QSUserDefaultPassward:
     Type: String
-    Description: Provide the Default Passward string you would like to use for the Amazomn QuickSight user. The Password should have at least one uppercase letter, one lowercase letter, one number, and one special character (@#$%^&+=). The passwaed must be at least 8 digits and a maximum of 64 digits (e.g Kendra1234@) You will be aksed to change this default passward when you log in to the Console first.
+    Description: Provide the Default Passward string you would like to use for the Amazomn QuickSight user. The Password should have at least one uppercase letter, one lowercase letter, one number, and one special character (@#$%^&+=!). The passwaed must be at least 8 digits and a maximum of 64 digits (e.g Kendra1234@) You will be aksed to change this default passward when you log in to the Console first.
     NoEcho: true
     MinLength: 8
     MaxLength: 64
-    AllowedPattern: '[A-Za-z0-9@#$%^&+=]+'
+    AllowedPattern: '[A-Za-z0-9@#$%^&+=!]+'
 
 Resources:
 # IAM Roles and policy
@@ -187,7 +187,7 @@ Resources:
       ModelName: "huggingface-pytorch-inference-kendrablog"
       PrimaryContainer: 
         Environment: 
-            HF_MODEL_ID: "sentence-transformers/all-MiniLM-L12-v1"
+            HF_MODEL_ID: "flax-sentence-embeddings/all_datasets_v4_MiniLM-L6"
             HF_TASK: "feature-extraction"
         Image: !Sub "763104351884.dkr.ecr.${AWS::Region}.amazonaws.com/huggingface-pytorch-inference:1.10.2-transformers4.17.0-cpu-py38-ubuntu20.04"
       ExecutionRoleArn: !GetAtt SageMakerIAMRole.Arn
@@ -206,7 +206,7 @@ Resources:
   SageMakerEndpoint:
       Type: "AWS::SageMaker::Endpoint"
       Properties:
-          EndpointName: "hf-serverless-ep-kendrablog"
+          EndpointName: "hf-serverless-ep-kendra-blog"
           EndpointConfigName: !GetAtt SageMakerEndpointConfig.EndpointConfigName
 
 
@@ -240,7 +240,7 @@ Resources:
 
         def get_kendra_analytics_snapshot(metricType):
           index_id = os.environ['INDEX_ID']
-          interval = 'ONE_MONTH_AGO'
+          interval = 'THIS_WEEK'
 
           snapshot = kendra.get_snapshots(
               IndexId= index_id,
@@ -286,7 +286,7 @@ Resources:
         ScheduleEvent:
           Type: ScheduleV2
           Properties:
-            ScheduleExpression: "rate(30 days)"
+            ScheduleExpression: "cron(0 9 3 * ? *)"
             State: ENABLED
 
   GetTrendtMetricsFunction:
@@ -315,7 +315,7 @@ Resources:
 
         def get_kendra_analytics_snapshot(metricType):
             index_id = os.environ['INDEX_ID']
-            interval = "ONE_MONTH_AGO"
+            interval = "THIS_WEEK"
             response = kendra.get_snapshots(
                 IndexId= index_id,
                 Interval= interval,
@@ -350,7 +350,7 @@ Resources:
         ScheduleEvent:
           Type: ScheduleV2
           Properties:
-            ScheduleExpression: "rate(30 days)"
+            ScheduleExpression: "cron(0 9 3 * ? *)"
             State: ENABLED
 
   HFProcessingFunction:
