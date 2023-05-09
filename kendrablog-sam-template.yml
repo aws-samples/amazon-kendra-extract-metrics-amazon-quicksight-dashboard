@@ -240,7 +240,7 @@ Resources:
 
         def get_kendra_analytics_snapshot(metricType):
           index_id = os.environ['INDEX_ID']
-          interval = 'THIS_WEEK'
+          interval = 'ONE_MONTH_AGO'
 
           snapshot = kendra.get_snapshots(
               IndexId= index_id,
@@ -315,7 +315,7 @@ Resources:
 
         def get_kendra_analytics_snapshot(metricType):
             index_id = os.environ['INDEX_ID']
-            interval = "THIS_WEEK"
+            interval = "ONE_MONTH_AGO"
             response = kendra.get_snapshots(
                 IndexId= index_id,
                 Interval= interval,
